@@ -15,7 +15,7 @@ TG_CHAT = 'YOUR_CHAT_ID'
 
 SYMBOL = 'BTC/USDT'
 TIMEFRAME = '15m'
-TRADE_AMOUNT = 0.001  # كمية التداول
+TRADE_AMOUNT = 0.001
 
 STOP_LOSS_PCT = 0.01
 TRAILING_PCT = 0.01
@@ -27,13 +27,9 @@ exchange = ccxt.binance({
     'apiKey': API_KEY,
     'secret': API_SECRET,
     'enableRateLimit': True,
-    'urls': {
-        'api': {
-            'public': 'https://testnet.binance.vision/api/v3',
-            'private': 'https://testnet.binance.vision/api/v3',
-        }
-    }
+    'options': {'defaultType': 'spot'}
 })
+exchange.set_sandbox_mode(True)
 
 def send_tg(msg):
     if TG_TOKEN != 'YOUR_TG_TOKEN':
